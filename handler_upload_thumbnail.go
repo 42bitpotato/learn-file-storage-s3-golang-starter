@@ -1,8 +1,6 @@
 package main
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,43 +32,52 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
 	// TODO: implement the upload here
-	const maxMemory = 10 << 20
+	const maxMemory = 10 << 20 // 10 MB
 	r.ParseMultipartForm(maxMemory)
 
-	file, imgHeader, err := r.FormFile("thumbnail")
+	file, header, err := r.FormFile("thumbnail")
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Unable to parse formfile", err)
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
 		return
 	}
-	mType := imgHeader.Header.Get("Content-Type")
-	if mType == "" {
-		respondWithError(w, http.StatusBadRequest, "Unable to parse media type", err)
+	defer file.Close()
+
+	mediaType := header.Header.Get("Content-Type")
+	if mediaType == "" {
+		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", nil)
+		return
 	}
 
-	imgData, err := io.ReadAll(file)
+	data, err := io.ReadAll(file)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error reading image data", err)
+		respondWithError(w, http.StatusInternalServerError, "Error reading file", err)
 		return
 	}
-	dbMetaData, err := cfg.db.GetVideo(videoID)
+
+	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			respondWithError(w, http.StatusNotFound, "Metadata not found in library", err)
-			return
-		}
-		respondWithError(w, http.StatusInternalServerError, "Error fetching metadata from database", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find video", err)
 		return
 	}
-	if dbMetaData.UserID != userID {
-		respondWithError(w, http.StatusUnauthorized, "Unauthorized request", err)
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", nil)
 		return
 	}
+
 	videoThumbnails[videoID] = thumbnail{
-		data:      imgData,
-		mediaType: mType,
+		data:      data,
+		mediaType: mediaType,
 	}
 
-	// dbMetaData.ThumbnailURL =
-	// err = cfg.db.UpdateVideo()
-	respondWithJSON(w, http.StatusOK, struct{}{})
+	url := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
+	video.ThumbnailURL = &url
+
+	err = cfg.db.UpdateVideo(video)
+	if err != nil {
+		delete(videoThumbnails, videoID)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, video)
 }
