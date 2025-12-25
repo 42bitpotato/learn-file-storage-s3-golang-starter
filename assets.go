@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -49,30 +50,41 @@ func mediaTypeToExt(mediaType string) string {
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {
-	ffprobe := exec.Command("ffprobe", "-v, error, -print_format, json, -show_streams %s", filePath)
-	stdout := &bytes.Buffer{}
-	ffprobe.Stdout = stdout
-	err := ffprobe.Run()
-	if err != nil {
-		return "", err
-	}
-	var VideoFormat struct {
-		Width  int `json:"width"`
-		Height int `json:"height"`
-	}
-	if err = json.Unmarshal(stdout.Bytes(), &VideoFormat); err != nil {
-		return "", err
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-print_format", "json",
+		"-show_streams",
+		filePath,
+	)
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ffprobe error: %v", err)
 	}
 
-	return aspectLabel(VideoFormat.Width, VideoFormat.Height), nil
-}
+	var output struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		return "", fmt.Errorf("could not parse ffprobe output: %v", err)
+	}
 
-func aspectLabel(width, height int) string {
-	if width*9/height == 16 {
-		return "16:9"
+	if len(output.Streams) == 0 {
+		return "", errors.New("no video streams found")
 	}
-	if height*9/width == 16 {
-		return "9:16"
+
+	width := output.Streams[0].Width
+	height := output.Streams[0].Height
+
+	if width == 16*height/9 {
+		return "16:9", nil
+	} else if height == 16*width/9 {
+		return "9:16", nil
 	}
-	return "other"
+	return "other", nil
 }
