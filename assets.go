@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -43,4 +46,33 @@ func mediaTypeToExt(mediaType string) string {
 		return ".bin"
 	}
 	return "." + parts[1]
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	ffprobe := exec.Command("ffprobe", "-v, error, -print_format, json, -show_streams %s", filePath)
+	stdout := &bytes.Buffer{}
+	ffprobe.Stdout = stdout
+	err := ffprobe.Run()
+	if err != nil {
+		return "", err
+	}
+	var VideoFormat struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	}
+	if err = json.Unmarshal(stdout.Bytes(), &VideoFormat); err != nil {
+		return "", err
+	}
+
+	return aspectLabel(VideoFormat.Width, VideoFormat.Height), nil
+}
+
+func aspectLabel(width, height int) string {
+	if width*9/height == 16 {
+		return "16:9"
+	}
+	if height*9/width == 16 {
+		return "9:16"
+	}
+	return "other"
 }
