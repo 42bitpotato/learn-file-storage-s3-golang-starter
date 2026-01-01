@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -76,7 +77,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer tempFile.Close()
-	defer os.Remove("tubely_upload.mp4")
+	defer os.Remove(tempFile.Name())
 
 	_, err = io.Copy(tempFile, file)
 	if err != nil {
@@ -101,12 +102,25 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		keyPrefix = "other"
 	}
 
+	processedFilePath, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error processing video to with ffmpeg", err)
+		return
+	}
+	processedFile, err := os.Open(processedFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error opening processed video file", err)
+		return
+	}
+	defer processedFile.Close()
+	defer os.Remove(processedFile.Name())
+
 	assetPath := getAssetPath(mediaType)
 	key := path.Join(keyPrefix, assetPath)
 	s3Params := s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &key,
-		Body:        tempFile,
+		Body:        processedFile,
 		ContentType: &mediaType,
 	}
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3Params)
@@ -124,4 +138,13 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	outputFilePath := fmt.Sprintf("%s.processing", filePath)
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputFilePath)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ffmpeg error: %v", err)
+	}
+	return outputFilePath, nil
 }
